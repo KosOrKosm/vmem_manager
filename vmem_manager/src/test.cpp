@@ -82,7 +82,7 @@ int main(int argc, const char* argv[]) {
 	table.showStats();
 
 	printf("\n\t\t...done.\n");
-	printf("Press any key to continue...");
+	printf("Press enter to continue...");
 	fflush(stdout);
 	getchar();
 	return 0;
