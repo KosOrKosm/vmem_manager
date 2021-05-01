@@ -49,46 +49,4 @@ static_assert(extractBits( 0,  8, 0xFFFF) == 0x00FF);
 static_assert(extractBits( 8, 16, 0xFFFF) == 0x00FF);
 static_assert(extractBits(12, 16, 0xAAAA) == 0x000A);
 
-#define isInteger(INT) std::enable_if_t<std::is_integral<INT>::value, int> = 1
-#define isEnum(E) std::enable_if_t<std::is_enum<E>::value, int> = 1
-#define isNotEnum(E) std::enable_if_t<std::is_enum<E>::value, int> = 0
-#define getEnumType(E) typename std::underlying_type<E>::type
-
-template<typename E, isEnum(E)>
-static constexpr getEnumType(E) enumToPrimitive(E e) noexcept {
-	return static_cast<getEnumType(E)>(e);
-}
-
-template<typename I, isInteger(I)>
-static constexpr bool areMaskedBitsSet(I bits, I mask) {
-	return ((mask ^ (bits & mask)) == 0) ? true : false;
-}
-
-template<typename I, isInteger(I), typename E, isEnum(E)>
-static constexpr bool areMaskedBitsSet(I bits, E mask) {
-	return areMaskedBitsSet(bits, enumToPrimitive(mask));
-}
-
-template<typename E, isEnum(E)>
-static constexpr bool areMaskedBitsSet(E bits, E mask) {
-	return areMaskedBitsSet(enumToPrimitive(bits), enumToPrimitive(mask));
-}
-
-template<typename I, isInteger(I)>
-static constexpr bool isBitSet(I bits, u8 bit) {
-	return areMaskedBitsSet(bits, bitmask<I>(bit, bit + 1));
-}
-
-static_assert(areMaskedBitsSet(0x0F00, 0x0F00) == true);
-static_assert(areMaskedBitsSet(0x0F00, 0x00F0) == false);
-static_assert(areMaskedBitsSet(0x1000, 0x1000) == true);
-static_assert(areMaskedBitsSet(0x1000, 0x100F) == false);
-static_assert(isBitSet(0x0001, 0) == true);
-static_assert(isBitSet(0x0010, 4) == true);
-static_assert(isBitSet(0x0100, 8) == true);
-static_assert(isBitSet(0x1000, 12) == true);
-static_assert(isBitSet(0x0010, 0) == false);
-static_assert(isBitSet(0x0100, 0) == false);
-static_assert(isBitSet(0x1000, 0) == false);
-
 #endif /* BITS_HPP_ */
