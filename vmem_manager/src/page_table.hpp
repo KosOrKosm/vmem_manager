@@ -29,15 +29,15 @@ template<u16 FRAME_SIZE, u16 MAX_FRAME, u16 MAX_PAGE, u16 TLB_SIZE>
 class PageTable {
 
 	struct FrameMeta {
-		u16 cur_page;
-		optional<list<u16>::iterator> age_iter;
+		u16 associated_page;
+		optional<list<u16>::iterator> last_usage;
 	};
 
 	class TLB {
 
 		struct Entry {
-			LogicalAddress addr;
-			byte* p_addr = nullptr;
+			u8 page;
+			byte* p_addr_base = nullptr;
 		};
 
 		array<Entry, TLB_SIZE> table;
@@ -50,31 +50,31 @@ class PageTable {
 				age_stack.push_front(i);
 		}
 
-		byte* tryFind(LogicalAddress addr) {
+		byte* tryFind(u8 page) {
 
 			for(Entry& entry : table)
-				if(entry.addr == addr)
-					return entry.p_addr;
+				if(entry.page == page)
+					return entry.p_addr_base;
 
 			return nullptr;
 
 		}
 
-		void ensureResident(LogicalAddress addr, byte* p_addr) {
+		void ensureResident(u8 page, byte* p_addr_base) {
 
 			u16 replace = age_stack.back();
 			age_stack.pop_back();
 			age_stack.push_front(replace);
-			table.at(replace).addr = addr;
-			table.at(replace).p_addr = p_addr;
+			table.at(replace).page = page;
+			table.at(replace).p_addr_base = p_addr_base;
 
 		}
 
 	};
 
-	array<byte[FRAME_SIZE], MAX_FRAME> physical_memory;
+	array<byte[FRAME_SIZE], MAX_FRAME> main_memory;
 	array<FrameMeta, MAX_FRAME> frame_metadata;
-	array<optional<u16>, MAX_PAGE> pages;
+	array<optional<u16>, MAX_PAGE> page_to_frame;
 	list<u16> age_stack;
 	TLB tlb;
 	u16 request_count = 0, page_fault_count = 0, tlb_hit_count = 0;
@@ -89,12 +89,12 @@ class PageTable {
 		FrameMeta& meta = frame_metadata.at(frame_index);
 
 		// Move the this frame's iter to the front of the stack
-		if (meta.age_iter.has_value())
-			age_stack.erase(meta.age_iter.value());
+		if (meta.last_usage.has_value())
+			age_stack.erase(meta.last_usage.value());
 		age_stack.push_front(frame_index);
 
 		// Update the frame's iter to the new position
-		meta.age_iter = age_stack.begin();
+		meta.last_usage = age_stack.begin();
 
 		return frame_index;
 	}
@@ -113,9 +113,9 @@ class PageTable {
 		FrameMeta& meta = frame_metadata.at(victim_index);
 
 		// Invalidate the victim frame and return it
-		if (meta.age_iter.has_value())
-			pages.at(meta.cur_page).reset(); // reset page as well, if a page is associated
-		meta.age_iter.reset();
+		if (meta.last_usage.has_value())
+			page_to_frame.at(meta.associated_page).reset(); // reset page as well, if a page is associated
+		meta.last_usage.reset();
 		return victim_index;
 
 	}
@@ -125,7 +125,7 @@ class PageTable {
 	// into a frame before returning that new frame's index.
 	u16 pageToFrame(u16 page_index) {
 
-		optional<u16>& frame = pages.at(page_index);
+		optional<u16>& frame = page_to_frame.at(page_index);
 
 		// Check if the page is already in memory
 		if (frame.has_value())
@@ -133,11 +133,11 @@ class PageTable {
 
 		// Grab an invalid frame and update it to be used by this page
 		frame = openFrame();
-		frame_metadata.at(frame.value()).cur_page = page_index;
+		frame_metadata.at(frame.value()).associated_page = page_index;
 
 		// Put the corresponding backing page's contents into the frame
 		backing.seekg(FRAME_SIZE * page_index);
-		backing.read(physical_memory.at(frame.value()), FRAME_SIZE);
+		backing.read(main_memory.at(frame.value()), FRAME_SIZE);
 
 		// Touch and return
 		return touchFrame(frame.value());
@@ -158,7 +158,7 @@ public:
 	// corresponding to the given LogicalAddress. This only works if the given
 	// LogicalAddress is currently loaded into memory
 	u64 calcRelativeAddress(LogicalAddress addr) {
-		if (!pages.at(addr.page()).has_value())
+		if (!page_to_frame.at(addr.page()).has_value())
 			throw std::invalid_argument("The data referenced by this "
 					"logical address has not been loaded!");
 		return pageToFrame(addr.page()) * FRAME_SIZE + addr.offset();
@@ -170,23 +170,29 @@ public:
 		++request_count; // for statistics purposes only
 
 		// Attempt to get the address from the TLB
-		byte* p_addr = tlb.tryFind(addr);
-		if (p_addr != nullptr) {
-			//std::cout << "TLB HIT" << std::endl;
+		byte* p_addr_base = tlb.tryFind(addr.page());
+		if (p_addr_base != nullptr) {
 			++tlb_hit_count;
-			return p_addr;
+			return p_addr_base + addr.offset();
 		}
 
 		// TLB Missed. Calculate physical address, pulling the
 		// frame into memory if necessary
 
-		//std::cout << "TLB MISS" << std::endl;
-		p_addr = physical_memory.at(pageToFrame(addr.page())) + addr.offset();
-		tlb.ensureResident(addr, p_addr);
-		return p_addr;
+		p_addr_base = main_memory.at(pageToFrame(addr.page()));
+		tlb.ensureResident(addr.page(), p_addr_base);
+		return p_addr_base + addr.offset();
 	}
 
-	void showStats() {
+	constexpr u16 pageFaultCount() const {
+		return page_fault_count;
+	}
+
+	constexpr u16 tlbHitCount() const {
+		return tlb_hit_count;
+	}
+
+	void showStats() const {
 		printf("\t    PAGE FAULTS: %-5d     \t    TLB HITS: %-5d\n",
 					page_fault_count, tlb_hit_count);
 		printf("\tPAGE FAULT RATE: %2.2f%%  \tTLB HIT RATE: %2.2f%%",
